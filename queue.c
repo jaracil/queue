@@ -29,6 +29,12 @@ typedef struct queue_s {
 	pthread_cond_t not_full;
 } queue_t;
 
+// static function declarations
+static void _queue_close(queue_t *q);
+static void _queue_purge(queue_t *q, queue_freefn_t freefn);
+static int _queue_pull(queue_t *q, void **data, int64_t timeout);
+// end of static function declarations
+
 static int deadline_ms(int64_t ms, struct timespec *tout){
 	clock_gettime(CLOCK_MONOTONIC, tout);
 	tout->tv_sec += (ms / 1000);
@@ -54,18 +60,30 @@ queue_t *queue_new(size_t max_size) {
 }
 
 void queue_free(queue_t *q, queue_freefn_t freefn) {
-	void *data;
-	queue_close(q);
-
-	while(queue_pull(q, &data, 0 ) == QUEUE_ERR_TIMEOUT) {
-		if (freefn != NULL && data != NULL) {
-			freefn(data);
-		}
-	}
+	pthread_mutex_lock(&q->mux);
+	_queue_close(q);
+	_queue_purge(q, freefn);
+	pthread_mutex_unlock(&q->mux);
 	pthread_mutex_destroy(&q->mux);
 	pthread_cond_destroy(&q->not_empty);
 	pthread_cond_destroy(&q->not_full);
 	free(q);
+}
+
+static void _queue_purge(queue_t *q, queue_freefn_t freefn) {
+	void *data;
+	while(_queue_pull(q, &data, 0 ) == QUEUE_ERR_OK) {
+		if (freefn != NULL && data != NULL) {
+			freefn(data);
+		}
+	}
+}
+
+void queue_purge(queue_t *q, queue_freefn_t freefn) {
+	pthread_mutex_lock(&q->mux);
+	_queue_purge(q, freefn);
+	pthread_mutex_unlock(&q->mux);
+	return;
 }
 
 static size_t _queue_elements(queue_t *q){
@@ -80,17 +98,21 @@ size_t queue_elements(queue_t *q) {
 	return r;
 }
 
+static void _queue_close(queue_t *q){
+	q->closed = true;
+	pthread_cond_broadcast(&q->not_empty); // Wake up all threads
+	pthread_cond_broadcast(&q->not_full);  //      on close
+}
+
 void queue_close(queue_t *q){
 	pthread_mutex_lock(&q->mux);
-	q->closed = true;
+	_queue_close(q);
 	pthread_mutex_unlock(&q->mux);
 	return;
 }
 
 static bool _queue_is_closed(queue_t *q){
 	return q->closed;
-	pthread_cond_broadcast(&q->not_empty);
-	pthread_cond_broadcast(&q->not_full);
 }
 
 bool queue_is_closed(queue_t *q) {

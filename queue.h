@@ -30,6 +30,10 @@ queue_t *queue_new(size_t max_size);
 // If freefn isn't NULL freefn is called on every element purged.
 void queue_free(queue_t *q, queue_freefn_t freefn);
 
+// Purge all pending elements.
+// If freefn isn't NULL freefn is called on every element purged.
+void queue_purge(queue_t *q, queue_freefn_t freefn);
+
 // Returns number of elements into queue.
 size_t queue_elements(queue_t *q);
 
