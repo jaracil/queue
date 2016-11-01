@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <time.h>
+#include <assert.h>
 
 #include "queue.h"
 #include "utlist.h"
@@ -23,17 +24,13 @@ typedef struct queue_s {
 	queue_item_t *items;
 	size_t max_size;
 	size_t count;
+	int refcount;
 	bool closed;
+	queue_freefn_t freefn;
 	pthread_mutex_t mux;
 	pthread_cond_t not_empty;
 	pthread_cond_t not_full;
 } queue_t;
-
-// static function declarations
-static void _queue_close(queue_t *q);
-static void _queue_purge(queue_t *q, queue_freefn_t freefn);
-static int _queue_pull(queue_t *q, void **data, int64_t timeout);
-// end of static function declarations
 
 static int deadline_ms(int64_t ms, struct timespec *tout){
 	clock_gettime(CLOCK_MONOTONIC, tout);
@@ -46,9 +43,10 @@ static int deadline_ms(int64_t ms, struct timespec *tout){
 	return 0;
 }
 
-queue_t *queue_new(size_t max_size) {
+queue_t *queue_new(size_t max_size, queue_freefn_t freefn) {
 	pthread_condattr_t cond_attr;
 	queue_t *q = calloc(1, sizeof(queue_t));
+	q->refcount = 1;
 	q->max_size = max_size;
 	pthread_mutex_init(&q->mux, NULL);
 	pthread_condattr_init(&cond_attr);
@@ -59,46 +57,66 @@ queue_t *queue_new(size_t max_size) {
 	return q;
 }
 
-void queue_free(queue_t *q, queue_freefn_t freefn) {
-	pthread_mutex_lock(&q->mux);
-	_queue_close(q);
-	_queue_purge(q, freefn);
-	pthread_mutex_unlock(&q->mux);
-	pthread_mutex_destroy(&q->mux);
-	pthread_cond_destroy(&q->not_empty);
-	pthread_cond_destroy(&q->not_full);
-	free(q);
+int queue_lock(queue_t *q) {
+	return pthread_mutex_lock(&q->mux);
 }
 
-static void _queue_purge(queue_t *q, queue_freefn_t freefn) {
+int queue_unlock(queue_t *q) {
+	return pthread_mutex_unlock(&q->mux);
+}
+
+void queue_unref(queue_t *q) {
+	pthread_mutex_lock(&q->mux);
+	assert(q->refcount > 0);
+	if ((--q->refcount) == 0){
+		// queue_close_nl(q); // Must close ??
+		queue_purge_nl(q);
+		pthread_mutex_unlock(&q->mux);
+		pthread_mutex_destroy(&q->mux);
+		pthread_cond_destroy(&q->not_empty);
+		pthread_cond_destroy(&q->not_full);
+		free(q);
+		return;
+	}
+	pthread_mutex_unlock(&q->mux);
+}
+
+void queue_ref(queue_t *q) {
+	pthread_mutex_lock(&q->mux);
+	assert(q->refcount > 0);
+	q->refcount++;
+	pthread_mutex_unlock(&q->mux);
+}
+
+void queue_purge_nl(queue_t *q) {
 	void *data;
-	while(_queue_pull(q, &data, 0 ) == QUEUE_ERR_OK) {
-		if (freefn != NULL && data != NULL) {
-			freefn(data);
+	while(queue_pull_nl(q, &data, 0 ) == QUEUE_ERR_OK) {
+		if (q->freefn != NULL && data != NULL) {
+			q->freefn(data);
 		}
 	}
 }
 
-void queue_purge(queue_t *q, queue_freefn_t freefn) {
+void queue_purge(queue_t *q) {
 	pthread_mutex_lock(&q->mux);
-	_queue_purge(q, freefn);
+	queue_purge_nl(q);
 	pthread_mutex_unlock(&q->mux);
 	return;
 }
 
-static size_t _queue_elements(queue_t *q){
+size_t queue_elements_nl(queue_t *q){
 	return q->count;
 }
 
 size_t queue_elements(queue_t *q) {
 	size_t r;
 	pthread_mutex_lock(&q->mux);
-	r = _queue_elements(q);
+	r = queue_elements_nl(q);
 	pthread_mutex_unlock(&q->mux);
 	return r;
 }
 
-static void _queue_close(queue_t *q){
+void queue_close_nl(queue_t *q){
 	q->closed = true;
 	pthread_cond_broadcast(&q->not_empty); // Wake up all threads
 	pthread_cond_broadcast(&q->not_full);  //      on close
@@ -106,36 +124,36 @@ static void _queue_close(queue_t *q){
 
 void queue_close(queue_t *q){
 	pthread_mutex_lock(&q->mux);
-	_queue_close(q);
+	queue_close_nl(q);
 	pthread_mutex_unlock(&q->mux);
 	return;
 }
 
-static bool _queue_is_closed(queue_t *q){
+bool queue_is_closed_nl(queue_t *q){
 	return q->closed;
 }
 
 bool queue_is_closed(queue_t *q) {
 	 bool r;
 	 pthread_mutex_lock(&q->mux);
-	 r = _queue_is_closed(q);
+	 r = queue_is_closed_nl(q);
 	 pthread_mutex_unlock(&q->mux);
 	 return r;
 }
 
-static bool _queue_is_empty(queue_t *q){
+bool queue_is_empty_nl(queue_t *q){
 	return q->count == 0;
 }
 
 bool queue_is_empty(queue_t *q) {
 	 bool r;
 	 pthread_mutex_lock(&q->mux);
-	 r = _queue_is_empty(q);
+	 r = queue_is_empty_nl(q);
 	 pthread_mutex_unlock(&q->mux);
 	 return r;
 }
 
-static bool _queue_is_full(queue_t *q){
+bool queue_is_full_nl(queue_t *q){
 	 bool r = false;
  	 if (q->max_size > 0){
  		 r = q->count >= q->max_size;
@@ -146,18 +164,18 @@ static bool _queue_is_full(queue_t *q){
 bool queue_is_full(queue_t *q) {
  	 bool r;
  	 pthread_mutex_lock(&q->mux);
- 	 r = _queue_is_full(q);
+ 	 r = queue_is_full_nl(q);
  	 pthread_mutex_unlock(&q->mux);
  	 return r;
  }
 
-static int _queue_push(queue_t *q, void *data, int prio, int64_t timeout) {
+int queue_push_nl(queue_t *q, void *data, int prio, int64_t timeout) {
 	struct timespec tout;
 	bool init_tout = false;
 	queue_item_t *qi;
 
-	if (_queue_is_closed(q)) return QUEUE_ERR_CLOSED;
-	while (_queue_is_full(q)){
+	if (queue_is_closed_nl(q)) return QUEUE_ERR_CLOSED;
+	while (queue_is_full_nl(q)){
 		if (timeout == 0){
 			return QUEUE_ERR_TIMEOUT;
 		} else if (timeout < 0){
@@ -168,7 +186,7 @@ static int _queue_push(queue_t *q, void *data, int prio, int64_t timeout) {
 				deadline_ms(timeout, &tout);
 			}
 			if (pthread_cond_timedwait(&q->not_full, &q->mux, &tout) != 0) return QUEUE_ERR_TIMEOUT;
-			if (_queue_is_closed(q)) return QUEUE_ERR_CLOSED;
+			if (queue_is_closed_nl(q)) return QUEUE_ERR_CLOSED;
 		}
 	}
 	if ( (qi = (queue_item_t*)malloc(sizeof(queue_item_t))) == NULL) exit(-1);
@@ -186,18 +204,18 @@ static int _queue_push(queue_t *q, void *data, int prio, int64_t timeout) {
 int queue_push(queue_t *q, void *data, int prio, int64_t timeout){
 	int r;
 	pthread_mutex_lock(&q->mux);
-	r = _queue_push(q, data, prio, timeout);
+	r = queue_push_nl(q, data, prio, timeout);
 	pthread_mutex_unlock(&q->mux);
 	return r;
 }
 
-static int _queue_pull(queue_t *q, void **data, int64_t timeout) {
+int queue_pull_nl(queue_t *q, void **data, int64_t timeout) {
 	struct timespec tout;
 	bool init_tout = false;
 	queue_item_t *qi;
 
-	while (_queue_is_empty(q)){
-		if (_queue_is_closed(q)) return QUEUE_ERR_CLOSED;
+	while (queue_is_empty_nl(q)){
+		if (queue_is_closed_nl(q)) return QUEUE_ERR_CLOSED;
 		if (timeout == 0){
 			return QUEUE_ERR_TIMEOUT;
 		} else if (timeout < 0){
@@ -222,7 +240,7 @@ static int _queue_pull(queue_t *q, void **data, int64_t timeout) {
 int queue_pull(queue_t *q, void **data, int64_t timeout){
 	int r;
 	pthread_mutex_lock(&q->mux);
-	r = _queue_pull(q, data, timeout);
+	r = queue_pull_nl(q, data, timeout);
 	pthread_mutex_unlock(&q->mux);
 	return r;
 }
