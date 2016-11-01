@@ -6,10 +6,12 @@
  */
 
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdbool.h>
 #include <pthread.h>
 #include <time.h>
 #include <assert.h>
+#include <sys/eventfd.h>
 
 #include "queue.h"
 #include "utlist.h"
@@ -25,6 +27,8 @@ typedef struct queue_s {
 	size_t max_size;
 	size_t count;
 	int refcount;
+	int read_fd;
+	int write_fd;
 	bool closed;
 	queue_freefn_t freefn;
 	pthread_mutex_t mux;
@@ -47,6 +51,7 @@ queue_t *queue_new(size_t max_size, queue_freefn_t freefn) {
 	pthread_condattr_t cond_attr;
 	queue_t *q = calloc(1, sizeof(queue_t));
 	q->refcount = 1;
+	q->read_fd = -1;
 	q->max_size = max_size;
 	pthread_mutex_init(&q->mux, NULL);
 	pthread_condattr_init(&cond_attr);
@@ -71,6 +76,14 @@ void queue_unref(queue_t *q) {
 	if ((--q->refcount) == 0){
 		// queue_close_nl(q); // Must close ??
 		queue_purge_nl(q);
+		if (q->read_fd >= 0){
+			close(q->read_fd);
+			q->read_fd = -1;
+		}
+		if (q->write_fd >= 0){
+			close(q->write_fd);
+			q->write_fd = -1;
+		}
 		pthread_mutex_unlock(&q->mux);
 		pthread_mutex_destroy(&q->mux);
 		pthread_cond_destroy(&q->not_empty);
@@ -87,6 +100,31 @@ void queue_ref(queue_t *q) {
 	q->refcount++;
 	pthread_mutex_unlock(&q->mux);
 }
+
+int queue_readfd(queue_t *q){
+	int r;
+	pthread_mutex_lock(&q->mux);
+	if (q->read_fd == -1) {
+		int initval = q->count ? 1 : 0;
+		q->read_fd = eventfd(initval, EFD_CLOEXEC | EFD_NONBLOCK);
+	}
+	r = q->read_fd;
+	pthread_mutex_unlock(&q->mux);
+	return r;
+}
+
+int queue_witefd(queue_t *q){
+	int r;
+	pthread_mutex_lock(&q->mux);
+	if (q->write_fd == -1) {
+		int initval = (!q->max_size) || (q->count < q->max_size) ? 1 : 0;
+		q->write_fd = eventfd(initval, EFD_CLOEXEC | EFD_NONBLOCK);
+	}
+	r = q->write_fd;
+	pthread_mutex_unlock(&q->mux);
+	return r;
+}
+
 
 void queue_purge_nl(queue_t *q) {
 	void *data;
@@ -198,6 +236,14 @@ int queue_push_nl(queue_t *q, void *data, int prio, int64_t timeout) {
 	}
 	q->count ++;
 	pthread_cond_signal(&q->not_empty);
+	if (q->read_fd >= 0 && q->count == 1) {
+		eventfd_write(q->read_fd, 1);
+	}
+	if (q->write_fd >= 0 && q->max_size && q->count == q->max_size) {
+		eventfd_t val;
+		eventfd_read(q->write_fd, &val);
+		assert(val == 1);
+	}
 	return QUEUE_ERR_OK;
 }
 
@@ -234,7 +280,15 @@ int queue_pull_nl(queue_t *q, void **data, int64_t timeout) {
 	free(qi);
 	q->count --;
 	pthread_cond_signal(&q->not_full);
-	return 0;
+	if (q->read_fd >= 0 && q->count == 0) {
+		eventfd_t val;
+		eventfd_read(q->read_fd, &val);
+		assert(val == 1);
+	}
+	if (q->write_fd >= 0 && q->max_size && q->count == q->max_size - 1) {
+		eventfd_write(q->write_fd, 1);
+	}
+	return QUEUE_ERR_OK;
 }
 
 int queue_pull(queue_t *q, void **data, int64_t timeout){

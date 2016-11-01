@@ -43,6 +43,15 @@ void queue_unref(queue_t *q);
 // Call this function before pass this queue to another thread.
 void queue_ref(queue_t *q);
 
+// Returns file descriptor suitable for polling (select/poll/epoll)
+// File descriptor is set to readable state when queue is not empty.
+int queue_readfd(queue_t *q);
+
+// Returns file descriptor suitable for polling (select/poll/epoll)
+// File descriptor is set to readable state when queue is not full.
+// On unlimited queues (max_size == 0) file descriptor is always in readable state.
+int queue_writefd(queue_t *q);
+
 // Purge all pending elements.
 // If freefn isn't NULL freefn is called on every element purged.
 void queue_purge(queue_t *q);
