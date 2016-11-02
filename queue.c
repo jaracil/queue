@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <assert.h>
+#include <stdint.h>
 #include <sys/eventfd.h>
 
 #include "queue.h"
@@ -52,6 +53,7 @@ queue_t *queue_new(size_t max_size, queue_freefn_t freefn) {
 	queue_t *q = calloc(1, sizeof(queue_t));
 	q->refcount = 1;
 	q->read_fd = -1;
+	q->write_fd = -1;
 	q->max_size = max_size;
 	pthread_mutex_init(&q->mux, NULL);
 	pthread_condattr_init(&cond_attr);
@@ -113,7 +115,7 @@ int queue_readfd(queue_t *q){
 	return r;
 }
 
-int queue_witefd(queue_t *q){
+int queue_writefd(queue_t *q){
 	int r;
 	pthread_mutex_lock(&q->mux);
 	if (q->write_fd == -1) {
