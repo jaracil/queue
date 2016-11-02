@@ -84,7 +84,7 @@ bool queue_is_full_nl(queue_t *q); // Non locking version
 // prio is the priority (use 0 as default).
 // if timeout < 0 queue_push waits until there are free space on the queue.
 // if timeout = 0 queue_push don't waits for free space.
-// if timeout > 0 queue_push waits for free space until timeout milliseconds.
+// if timeout > 0 queue_push waits for free space up to timeout milliseconds.
 // Returns QUEUE_ERR_TIMEOUT if no space were available or QUEUE_ERR_CLOSED if queue was closed.
 int queue_push(queue_t *q, void *data, int prio, int64_t timeout);
 int queue_push_nl(queue_t *q, void *data, int prio, int64_t timeout); // Non locking version
@@ -93,10 +93,17 @@ int queue_push_nl(queue_t *q, void *data, int prio, int64_t timeout); // Non loc
 // data is a pointer to the pointer that will store the pulled element.
 // if timeout < 0 queue_pull waits until available elements.
 // if timeout = 0 queue_pull don't waits for available elements.
-// if timeout > 0 queue_pull waits for available elements until timeout milliseconds.
+// if timeout > 0 queue_pull waits for available elements up to timeout milliseconds.
 // Returns QUEUE_ERR_TIMEOUT if no elements were available or QUEUE_ERR_CLOSED if queue was closed and empty.
 int queue_pull(queue_t *q, void **data, int64_t timeout);
 int queue_pull_nl(queue_t *q, void **data, int64_t timeout); // Non locking version
 
+// Waits until queue is closed or timeout expired.
+// if timeout < 0 queue_wait_close waits until queue is closed.
+// if timeout = 0 queue_wait_close don't wait until queue is closed.
+// if timeout > 0 queue_wait_close waits for queue closing up to timeout milliseconds.
+// Returns QUEUE_ERR_TIMEOUT if queue was not closed or QUEUE_ERR_OK if queue was closed.
+int queue_wait_close(queue_t *q, int64_t timeout);
+int queue_wait_close_nl(queue_t *q, int64_t timeout); // Non locking version
 #endif /* QUEUE_H_ */
 

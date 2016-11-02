@@ -300,3 +300,31 @@ int queue_pull(queue_t *q, void **data, int64_t timeout){
 	pthread_mutex_unlock(&q->mux);
 	return r;
 }
+
+int queue_wait_close_nl(queue_t *q, int64_t timeout){
+	struct timespec tout;
+	bool init_tout = false;
+
+	while (!queue_is_closed_nl(q)){
+		if (timeout == 0){
+			return QUEUE_ERR_TIMEOUT;
+		} else if (timeout < 0){
+			pthread_cond_wait(&q->not_empty, &q->mux);
+		} else {
+			if (!init_tout){
+				init_tout = true;
+				deadline_ms(timeout, &tout);
+			}
+			if (pthread_cond_timedwait(&q->not_empty, &q->mux, &tout) != 0) return QUEUE_ERR_TIMEOUT;
+		}
+	}
+	return QUEUE_ERR_OK;
+}
+
+int queue_wait_close(queue_t *q, int64_t timeout){
+	int r;
+	pthread_mutex_lock(&q->mux);
+	r = queue_wait_close_nl(q, timeout);
+	pthread_mutex_unlock(&q->mux);
+	return r;
+}
