@@ -16,11 +16,7 @@ typedef struct queue_s queue_t;
 
 typedef void (*queue_freefn_t)(void *);
 
-enum {
-	QUEUE_ERR_OK = 0,
-	QUEUE_ERR_TIMEOUT = 1,
-	QUEUE_ERR_CLOSED = 2
-};
+enum { QUEUE_ERR_OK = 0, QUEUE_ERR_TIMEOUT = 1, QUEUE_ERR_CLOSED = 2 };
 
 // Creates new queue, if max_size is 0 size is unlimited.
 // If freefn isn't NULL freefn is called on every element purged (queue_purge/unref function).
@@ -41,7 +37,7 @@ void queue_unref(queue_t *q);
 
 // Increments queue ref counter.
 // Call this function before pass this queue to another thread.
-void queue_ref(queue_t *q);
+queue_t *queue_ref(queue_t *q);
 
 // Returns file descriptor suitable for polling (select/poll/epoll)
 // File descriptor is set to readable state when queue is not empty.
@@ -105,5 +101,4 @@ int queue_pull_nl(queue_t *q, void **data, int64_t timeout); // Non locking vers
 // Returns QUEUE_ERR_TIMEOUT if queue was not closed or QUEUE_ERR_OK if queue was closed.
 int queue_wait_close(queue_t *q, int64_t timeout);
 int queue_wait_close_nl(queue_t *q, int64_t timeout); // Non locking version
-#endif /* QUEUE_H_ */
-
+#endif                                                /* QUEUE_H_ */
