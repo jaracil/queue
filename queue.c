@@ -108,8 +108,9 @@ int queue_readfd(queue_t *q){
 	pthread_mutex_lock(&q->mux);
 	if (q->read_fd == -1) {
 		int initval = q->count ? 1 : 0;
-		q->read_fd = eventfd(initval, EFD_CLOEXEC | EFD_NONBLOCK);
+		q->read_fd = eventfd(initval, EFD_SEMAPHORE | EFD_CLOEXEC | EFD_NONBLOCK);
 	}
+	if (q->closed && q->read_fd >= 0) eventfd_write(q->read_fd, 1);
 	r = q->read_fd;
 	pthread_mutex_unlock(&q->mux);
 	return r;
@@ -120,8 +121,9 @@ int queue_writefd(queue_t *q){
 	pthread_mutex_lock(&q->mux);
 	if (q->write_fd == -1) {
 		int initval = (!q->max_size) || (q->count < q->max_size) ? 1 : 0;
-		q->write_fd = eventfd(initval, EFD_CLOEXEC | EFD_NONBLOCK);
+		q->write_fd = eventfd(initval, EFD_SEMAPHORE | EFD_CLOEXEC | EFD_NONBLOCK);
 	}
+	if (q->closed && q->write_fd >= 0) eventfd_write(q->write_fd, 1);
 	r = q->write_fd;
 	pthread_mutex_unlock(&q->mux);
 	return r;
@@ -157,9 +159,13 @@ size_t queue_elements(queue_t *q) {
 }
 
 void queue_close_nl(queue_t *q){
-	q->closed = true;
-	pthread_cond_broadcast(&q->not_empty); // Wake up all threads
-	pthread_cond_broadcast(&q->not_full);  //      on close
+	if (!q->closed){
+		q->closed = true;
+		pthread_cond_broadcast(&q->not_empty);					// Wake up all threads
+		pthread_cond_broadcast(&q->not_full);					//      on close
+		if (q->read_fd >= 0) eventfd_write(q->read_fd, 1);		//
+		if (q->write_fd >= 0) eventfd_write(q->write_fd, 1);	//
+	}
 }
 
 void queue_close(queue_t *q){
