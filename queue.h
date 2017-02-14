@@ -71,7 +71,7 @@ bool queue_is_closed_nl(queue_t *q); // Non locking version
 bool queue_is_empty(queue_t *q);
 bool queue_is_empty_nl(queue_t *q); // Non locking version
 
-// Returns true id queue is full.
+// Returns true if queue is full.
 bool queue_is_full(queue_t *q);
 bool queue_is_full_nl(queue_t *q); // Non locking version
 
